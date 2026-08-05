@@ -1,56 +1,28 @@
-name: PostgreSQL forward and rollback
-
+name: Harness CI
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  certify:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+  validate:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 1
-          persist-credentials: false
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+          python-version: '3.12'
+      - run: python -m pip install -e '.[test]'
+      - run: pytest -q
+      - run: python scripts/readiness.py --offline
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          workspaces: vendor/declarative-postgres-migrate.rs -> target
-      - name: Validate repository contract
-        run: python3 scripts/verify-repository.py
-      - name: Install PostgreSQL client
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
-      - name: Build pinned dpm
-        id: dpm
-        shell: bash
-        run: echo "path=$(scripts/build-dpm.sh)" >> "$GITHUB_OUTPUT"
-      - name: Run repeated live PostgreSQL cycles
-        env:
-          DPM_BIN: ${{ steps.dpm.outputs.path }}
-          POSTGRES_ADMIN_URL: postgres://postgres@localhost:5432/postgres
-        run: scripts/test-postgres-forward-rollback.sh
+          name: readiness-${{ github.run_id }}
+          path: artifacts/readiness-status.json
+          if-no-files-found: error

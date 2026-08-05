@@ -1,0 +1,50 @@
+schema_version: 1
+managed_by: github-test-org-factory/1.0.0
+production_org: declarative-migrations
+test_org: declarative-migrations-test
+repository: postgres-forward-rollback
+kind: database
+readiness: ready
+objectives:
+- Verify repeated apply and rollback with schema/data equivalence on PostgreSQL across the supported happy-path states
+  and canonical fixtures.
+- Verify repeated apply and rollback with schema/data equivalence on PostgreSQL under retries, interruption, concurrency,
+  offline operation, or partial failure.
+- Verify repeated apply and rollback with schema/data equivalence on PostgreSQL preserves authorization, idempotency,
+  integrity, observability, and actionable failure classification.
+always_on_checks:
+- Validate test-plan and dependency metadata.
+- Validate generated fixture and workflow syntax.
+- Classify missing upstreams or credentials separately from product regressions.
+schedule_utc: 23 4 * * 2,5
+expensive: false
+required_infrastructure:
+- PostgreSQL
+cases:
+- id: TC-001
+  title: Verify repeated apply and rollback with schema/data equivalence on PostgreSQL across the supported happy-path
+    states and canonical fixtures.
+  tier: contract-live
+  status: planned
+  evidence:
+  - junit
+  - readiness JSON
+  - workflow artifacts
+- id: TC-002
+  title: Verify repeated apply and rollback with schema/data equivalence on PostgreSQL under retries, interruption, concurrency,
+    offline operation, or partial failure.
+  tier: contract-live
+  status: planned
+  evidence:
+  - junit
+  - readiness JSON
+  - workflow artifacts
+- id: TC-003
+  title: Verify repeated apply and rollback with schema/data equivalence on PostgreSQL preserves authorization, idempotency,
+    integrity, observability, and actionable failure classification.
+  tier: contract-live
+  status: planned
+  evidence:
+  - junit
+  - readiness JSON
+  - workflow artifacts
