@@ -1,0 +1,68 @@
+name: PostgreSQL rollback certification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "17"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: vendor/dpm -> target
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Validate repository contract
+        run: python3 scripts/verify-repository.py
+      - name: Build pinned production dpm
+        id: dpm
+        shell: bash
+        run: echo "path=$(scripts/build-dpm.sh)" >> "$GITHUB_OUTPUT"
+      - name: Run repeated forward and rollback cycles
+        env:
+          DPM_BIN: ${{ steps.dpm.outputs.path }}
+          POSTGRES_ADMIN_URL: postgres://postgres@localhost:5432/postgres
+        run: scripts/test-postgres-rollback.sh
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: postgres-${{ matrix.postgres }}-rollback-evidence
+          path: artifacts
+          retention-days: 7
+          if-no-files-found: warn
