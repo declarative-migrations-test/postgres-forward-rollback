@@ -1,15 +1,25 @@
-# PostgreSQL rollback end-to-end certification
+# postgres-forward-rollback
 
-This repository continuously certifies `declarative-migrations/declarative-postgres-migrate.rs` against live PostgreSQL instances.
+Repeated forward and destructive rollback certification against live PostgreSQL with schema convergence and data-preservation assertions.
 
-The workflow pins production commit `21eb846e356b2a5aff068b21e77903e6cca50452`, builds the real `dpm` CLI, and runs repeated forward, gated-rollback, destructive-rollback, idempotency, convergence, and data-preservation checks on PostgreSQL 16 and 17.
+This repository is part of the isolated `declarative-migrations-test` certification fleet. It pins the production implementation as a Git submodule at `declarative-migrations/declarative-postgres-migrate.rs@21eb846e356b2a5aff068b21e77903e6cca50452` and exercises real PostgreSQL and/or CockroachDB instances in GitHub Actions.
 
-## Local run
+## Fleet
+
+- `.github`
+- `postgres-forward-rollback`
+- `cockroach-forward-rollback`
+- `cross-engine-compatibility`
+- `concurrent-migrator-lock`
+- `failure-injection-atomicity`
+- `schema-drift-detection`
+- `cli-mcp-contract`
+
+## Local contract
 
 ```bash
-export POSTGRES_ADMIN_URL=postgres://postgres@localhost:5432/postgres
+git submodule update --init --recursive
 scripts/build-dpm.sh
-DPM_BIN="$PWD/vendor/dpm/target/release/dpm" scripts/test-postgres-rollback.sh
 ```
 
-The test owns a throwaway database and removes it on exit. Never point it at a persistent database.
+Every behavior change must add a regression, preserve exact dependency pinning, avoid credentials in source or logs, and land through a pull request.
