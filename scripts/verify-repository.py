@@ -18,8 +18,18 @@ if missing:
     raise SystemExit(f"missing required files: {missing}")
 if manifest["production_dependency"]["commit"] != "21eb846e356b2a5aff068b21e77903e6cca50452":
     raise SystemExit("production dependency pin drifted")
+
+# The vendored production dependency is independently pinned by Git SHA. Scan
+# only this harness's owned files so upstream documentation examples cannot be
+# misclassified as unresolved merge markers or credentials.
 for path in root.rglob("*"):
-    if not path.is_file() or ".git" in path.parts or path.stat().st_size > 1_000_000:
+    relative = path.relative_to(root)
+    if (
+        not path.is_file()
+        or ".git" in relative.parts
+        or "vendor" in relative.parts
+        or path.stat().st_size > 1_000_000
+    ):
         continue
     try:
         text = path.read_text()
