@@ -14,13 +14,15 @@ required = [
     "AGENTS.md",
     "LICENSE",
     ".gitmodules",
+    ".github/workflows/ci.yml",
+    ".github/workflows/canonical-backup-restore.yml",
+    ".github/workflows/canonical-quote-readiness.yml",
     "bootstrap-manifest.json",
     "production-dependency.json",
     "canonical-quote-source.json",
-    ".github/workflows/ci.yml",
-    ".github/workflows/canonical-quote-readiness.yml",
     "scripts/build-dpm.sh",
     "scripts/test-postgres-forward-rollback.sh",
+    "scripts/test-canonical-backup-restore.sh",
     "scripts/test-canonical-quote-readiness.sh",
 ]
 missing = [path for path in required if not (root / path).exists()]
@@ -99,17 +101,48 @@ for required_text in (
     if required_text not in workflow:
         raise SystemExit(f"workflow omits {required_text}")
 
+backup_workflow = (root / ".github/workflows/canonical-backup-restore.yml").read_text()
+for required_text in (
+    "postgres:17",
+    "postgres:18",
+    f"repository: {source['sourceRepository']}",
+    f"ref: {source['sourceCommit']}",
+    "scripts/test-canonical-backup-restore.sh",
+    "persist-credentials: false",
+    "contents: read",
+):
+    if required_text not in backup_workflow:
+        raise SystemExit(f"backup/restore workflow omits {required_text}")
+
+backup_script = (root / "scripts/test-canonical-backup-restore.sh").read_text()
+for required_text in (
+    "pg_dump",
+    "pg_restore",
+    "postgres:17",
+    "postgres:18",
+    "--no-owner",
+    "--no-acl",
+    "canonical_cloud__quote__migrator",
+    "canonical_cloud__quote__api_rw",
+    "canonical_cloud__quote__web_ro",
+    "relforcerowsecurity",
+    "--fail-on-diff",
+):
+    if required_text not in backup_script:
+        raise SystemExit(f"backup/restore script omits {required_text}")
+
 readiness_workflow = (
     root / ".github/workflows/canonical-quote-readiness.yml"
 ).read_text()
 for required_text in (
+    "postgres: ['17', '18']",
     f"repository: {source['sourceRepository']}",
     f"ref: {source['sourceCommit']}",
     "scripts/test-canonical-quote-readiness.sh",
-    "postgres: ['17', '18']",
     "cargo test --locked --all-targets",
     "cargo clippy --locked --all-targets",
     "persist-credentials: false",
+    "contents: read",
 ):
     if required_text not in readiness_workflow:
         raise SystemExit(f"readiness workflow omits {required_text}")
