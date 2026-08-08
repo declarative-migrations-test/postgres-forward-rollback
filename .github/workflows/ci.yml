@@ -16,12 +16,12 @@ concurrency:
 jobs:
   certify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
@@ -37,7 +37,7 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
-          toolchain: stable
+          toolchain: "1.97.1"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: vendor/declarative-postgres-migrate.rs -> target
@@ -52,5 +52,10 @@ jobs:
       - name: Run repeated live PostgreSQL cycles
         env:
           DPM_BIN: ${{ steps.dpm.outputs.path }}
-          POSTGRES_ADMIN_URL: postgres://postgres@localhost:5432/postgres
+          POSTGRES_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: scripts/test-postgres-forward-rollback.sh
+      - name: Certify Canonical quote schema, RLS, replay, and drift recovery
+        env:
+          DPM_BIN: ${{ steps.dpm.outputs.path }}
+          POSTGRES_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: scripts/test-canonical-quote-postgres.sh

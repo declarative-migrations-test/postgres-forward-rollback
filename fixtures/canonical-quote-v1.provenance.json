@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "purpose": "Canonical quote PostgreSQL readiness certification",
+  "source_repository": "canonical-cloud/canonical-api-server.rs",
+  "source_commit": "849b0b161860739e6b9f219a52adff6c42193bc8",
+  "source_path": "db/schema.sql",
+  "source_git_blob": "49b141c0d3d9fa8f498cf000b2aad62ac5ac88b1",
+  "fixture_path": "fixtures/canonical-quote-v1.sql",
+  "declarative_migrator_repository": "declarative-migrations/declarative-postgres-migrate.rs",
+  "declarative_migrator_commit": "21eb846e356b2a5aff068b21e77903e6cca50452",
+  "database": "PostgreSQL 17",
+  "production_write": false
+}
