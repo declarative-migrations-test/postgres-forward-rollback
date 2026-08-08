@@ -1,4 +1,4 @@
-name: Canonical quote PostgreSQL certification
+name: Canonical quote v1 PostgreSQL certification
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: canonical-quote-${{ github.workflow }}-${{ github.ref }}
+  group: canonical-quote-v1-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,29 +44,55 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Checkout exact Canonical quote API candidate
+      - name: Checkout exact Canonical quote v1 API candidate
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: canonical-cloud/canonical-api-server.rs
-          ref: edaa7a9eff402cd7d88dd76166d547acd76b6365
+          ref: 4eb27ff78bc9cd93a81b8771710b56c18b41e7d3
           path: canonical-api
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify immutable source and migration pins
+      - name: Verify immutable source contract and migration pins
         shell: bash
         run: |
           set -euo pipefail
           test "$(git -C canonical-api rev-parse HEAD)" = \
-            "edaa7a9eff402cd7d88dd76166d547acd76b6365"
-          test "$(python3 -c 'import json; print(json.load(open("canonical-api/dpm.lock.json"))["tool"]["commit"])')" = \
-            "21eb846e356b2a5aff068b21e77903e6cca50452"
+            "4eb27ff78bc9cd93a81b8771710b56c18b41e7d3"
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          api = Path('canonical-api')
+          dpm = json.loads((api / 'dpm.lock.json').read_text())
+          assert dpm['tool']['commit'] == \
+              '21eb846e356b2a5aff068b21e77903e6cca50452'
+
+          contract = json.loads((api / 'interfaces.lock.json').read_text())
+          assert contract['schema_version'] == 1
+          assert contract['canonical_lib']['commit'] == \
+              'f0add30d4cc7e6825d24565e1db115751f833966'
+          assert contract['canonical_interfaces']['commit'] == \
+              '4c6ca63ca24fa214a1cb1a917ac27f1d5265916a'
+          fixture = api / contract['canonical_interfaces'][\
+              'quote_request_fixture']['path']
+          actual_blob = subprocess.check_output(
+              ['git', '-C', str(api), 'hash-object',
+               contract['canonical_interfaces']['quote_request_fixture']['path']],
+              text=True,
+          ).strip()
+          assert actual_blob == contract['canonical_interfaces'][\
+              'quote_request_fixture']['git_blob']
+          assert actual_blob == 'fe8bf1ad08a7152d44ead22ee0d082842d28b208'
+          assert fixture.is_file()
+          PY
           python3 scripts/verify-repository.py
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
-          toolchain: stable
+          toolchain: '1.95.0'
           components: rustfmt, clippy
 
       - name: Cache Rust builds
@@ -75,7 +101,7 @@ jobs:
           workspaces: |
             vendor/declarative-postgres-migrate.rs -> target
             canonical-api -> target
-          key: canonical-quote-pg${{ matrix.postgres }}
+          key: canonical-quote-v1-pg${{ matrix.postgres }}
 
       - name: Install PostgreSQL client
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
@@ -89,15 +115,15 @@ jobs:
         run: cargo fmt --manifest-path canonical-api/Cargo.toml --all -- --check
 
       - name: Test exact Canonical candidate
-        run: cargo test --locked --all-targets --manifest-path canonical-api/Cargo.toml
+        run: cargo test --locked --all-targets --all-features --manifest-path canonical-api/Cargo.toml
 
       - name: Lint exact Canonical candidate
-        run: cargo clippy --locked --all-targets --manifest-path canonical-api/Cargo.toml -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features --manifest-path canonical-api/Cargo.toml -- -D warnings
 
       - name: Build exact Canonical candidate
         run: cargo build --locked --manifest-path canonical-api/Cargo.toml --bin canonical-api-server
 
-      - name: Apply verify exercise drift and repair
+      - name: Apply verify exercise canonical v1 drift and repair
         env:
           CANONICAL_API_DIR: ${{ github.workspace }}/canonical-api
           DPM_BIN: ${{ steps.dpm.outputs.path }}
