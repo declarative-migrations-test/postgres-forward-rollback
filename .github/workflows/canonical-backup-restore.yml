@@ -1,0 +1,136 @@
+name: Canonical quote PostgreSQL backup restore
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/canonical-backup-restore.yml"
+      - "canonical-quote-source.json"
+      - "scripts/build-dpm.sh"
+      - "scripts/test-canonical-backup-restore.sh"
+      - "scripts/verify-repository.py"
+      - "README.md"
+      - "vendor/declarative-postgres-migrate.rs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/canonical-backup-restore.yml"
+      - "canonical-quote-source.json"
+      - "scripts/build-dpm.sh"
+      - "scripts/test-canonical-backup-restore.sh"
+      - "scripts/verify-repository.py"
+      - "README.md"
+      - "vendor/declarative-postgres-migrate.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canonical-quote-backup-restore-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-17-to-18:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres17:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      postgres18:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Check out the migration test repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Check out the exact Canonical quote source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: canonical-cloud/canonical-api-server.rs
+          ref: 26967bed96b1b48ea846c3fd418018ea40f4b9e1
+          path: vendor/canonical-api-server.rs
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+
+      - name: Restore the migrator build cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: vendor/declarative-postgres-migrate.rs -> target
+          key: canonical-quote-backup-restore-rust-1.95
+
+      - name: Install PostgreSQL client tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Validate immutable source and repository contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-repository.py
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          contract = json.loads(Path('canonical-quote-source.json').read_text())
+          source = Path('vendor/canonical-api-server.rs')
+          assert contract['sourceCommit'] == '26967bed96b1b48ea846c3fd418018ea40f4b9e1'
+          assert contract['dpmCommit'] == 'd05a7880987ddaa271fa88b52c787390ef12b899'
+          assert hashlib.sha256(
+              (source / contract['schemaPath']).read_bytes()
+          ).hexdigest() == contract['schemaSha256']
+          namespace = json.loads((source / 'db/namespace.json').read_text())
+          assert namespace['namespaceId'] == 'canonical_cloud__quote'
+          assert namespace['declarativeMigration']['revision'] == contract['dpmCommit']
+          PY
+
+      - name: Build the reviewed dpm executable
+        id: dpm
+        shell: bash
+        run: echo "path=$(scripts/build-dpm.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Certify PostgreSQL 17 dump and PostgreSQL 18 restore
+        env:
+          CANONICAL_SOURCE_DIR: ${{ github.workspace }}/vendor/canonical-api-server.rs
+          DPM_BIN: ${{ steps.dpm.outputs.path }}
+          SOURCE_ADMIN_URL: postgres://postgres@127.0.0.1:5432/postgres
+          RESTORE_ADMIN_URL: postgres://postgres@127.0.0.1:5433/postgres
+        run: scripts/test-canonical-backup-restore.sh
+
+      - name: Upload bounded failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canonical-quote-backup-restore-${{ github.run_id }}
+          path: artifacts/canonical-backup-restore
+          if-no-files-found: warn
+          retention-days: 7
