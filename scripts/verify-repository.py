@@ -41,7 +41,10 @@ for required_text in (
     if required_text not in workflow:
         raise SystemExit(f"workflow omits {required_text}")
 for path in root.rglob("*"):
-    if not path.is_file() or ".git" in path.parts or path.stat().st_size > 1_000_000:
+    relative = path.relative_to(root)
+    if not path.is_file() or ".git" in relative.parts or "vendor" in relative.parts:
+        continue
+    if path.stat().st_size > 1_000_000:
         continue
     try:
         text = path.read_text()
