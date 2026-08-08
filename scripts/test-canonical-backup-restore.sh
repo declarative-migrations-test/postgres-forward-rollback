@@ -231,12 +231,18 @@ done
 
 # Bootstrap establishes the cluster roles and per-database role settings. The
 # empty schema is removed before restore so the archive recreates every object
-# under the reviewed migrator identity.
+# under the reviewed migrator identity. CREATE on the database is granted only
+# for the schema-creation phase of this recovery exercise and is revoked even
+# when pg_restore fails.
 psql "$RESTORE_DB_ADMIN_URL" -v ON_ERROR_STOP=1 \
   -f "$CANONICAL_SOURCE_DIR/db/bootstrap.sql" >/dev/null
 psql "$RESTORE_DB_ADMIN_URL" -v ON_ERROR_STOP=1 \
   -c "DROP SCHEMA canonical_cloud__quote CASCADE" >/dev/null
+psql "$RESTORE_ADMIN_URL" -v ON_ERROR_STOP=1 \
+  -c "GRANT CREATE ON DATABASE ${RESTORE_DATABASE} TO canonical_cloud__quote__migrator" \
+  >/dev/null
 
+set +e
 docker run --rm --network host \
   -v "$ARTIFACTS:/backup" \
   postgres:18 \
@@ -247,6 +253,21 @@ docker run --rm --network host \
     --no-acl \
     --role=canonical_cloud__quote__migrator \
     /backup/canonical-quote.dump
+restore_status=$?
+set -e
+
+psql "$RESTORE_ADMIN_URL" -v ON_ERROR_STOP=1 \
+  -c "REVOKE CREATE ON DATABASE ${RESTORE_DATABASE} FROM canonical_cloud__quote__migrator" \
+  >/dev/null
+test "$restore_status" -eq 0
+
+test "$(psql "$RESTORE_ADMIN_URL" -Atqc "
+  SELECT has_database_privilege(
+    'canonical_cloud__quote__migrator',
+    '${RESTORE_DATABASE}',
+    'CREATE'
+  )::int
+")" = "0"
 
 psql "$RESTORE_DB_ADMIN_URL" -v ON_ERROR_STOP=1 \
   -f "$CANONICAL_SOURCE_DIR/db/grants.sql" >/dev/null
