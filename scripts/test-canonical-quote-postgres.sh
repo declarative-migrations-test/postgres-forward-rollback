@@ -67,7 +67,8 @@ apply_and_verify
 assert_scalar 4 "SELECT count(*) FROM pg_class WHERE relkind='r' AND relname IN ('canonical_context','canonical_quote','canonical_quote_event','canonical_model_attempt')"
 assert_scalar 4 "SELECT count(*) FROM pg_class WHERE relkind='r' AND relrowsecurity AND relforcerowsecurity AND relname IN ('canonical_context','canonical_quote','canonical_quote_event','canonical_model_attempt')"
 assert_scalar 4 "SELECT count(*) FROM pg_policies WHERE schemaname='public' AND tablename IN ('canonical_context','canonical_quote','canonical_quote_event','canonical_model_attempt')"
-assert_scalar 4 "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname IN ('canonical_context_owner_active_idx','canonical_quote_owner_created_idx','canonical_quote_event_quote_sequence_idx','canonical_model_attempt_quote_started_idx')"
+assert_scalar 5 "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname IN ('canonical_context_owner_active_idx','canonical_context_one_active_per_owner_idx','canonical_quote_owner_created_idx','canonical_quote_event_quote_sequence_idx','canonical_model_attempt_quote_started_idx')"
+assert_scalar 1 "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='canonical_context_one_active_per_owner_idx' AND i.indisunique AND position('active' in lower(pg_get_expr(i.indpred,i.indrelid))) > 0"
 assert_scalar 2 "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('canonical_context_set_updated_at','canonical_quote_set_updated_at')"
 assert_scalar 1 "SELECT count(*) FROM pg_proc WHERE proname='canonical_set_updated_at'"
 
@@ -109,6 +110,21 @@ INSERT INTO canonical_context (
     '{"environment":"test","contains_secrets":false}'::jsonb,
     TRUE
 );
+INSERT INTO canonical_context (
+    id,
+    owner_subject,
+    name,
+    context_markdown,
+    context_json,
+    active
+) VALUES (
+    '10000000-0000-4000-8000-000000000005',
+    'owner-a',
+    'Historical inactive context',
+    'Synthetic inactive context only.',
+    '{"environment":"test","active":false}'::jsonb,
+    FALSE
+);
 INSERT INTO canonical_quote (
     id,
     owner_subject,
@@ -123,11 +139,11 @@ INSERT INTO canonical_quote (
     '20000000-0000-4000-8000-000000000002',
     'owner-a',
     '10000000-0000-4000-8000-000000000001',
-    '{"organizationName":"Example Company","contactName":"Taylor Example","contactEmail":"security@example.com","employeeCount":120,"frameworks":["soc2_type_2","nist_800_53","hipaa"],"currentStage":"readiness","infrastructure":["aws","saas_only"],"dataSensitivity":["confidential","pii","phi"],"hasSecurityProgram":true,"hasPolicies":true,"hasRiskAssessment":false,"hasIncidentResponsePlan":true,"hasVendorManagement":false,"contextKey":"quote-analysis","answersVersion":1}'::jsonb,
+    '{"organizationName":"Example Company","contactName":"Taylor Example","contactEmail":"security@example.com","employeeCount":120,"frameworks":["soc2_type_2","nist_800_53","hipaa"],"currentStage":"readiness","infrastructure":["aws","saas_only"],"dataSensitivity":["confidential","pii","phi"],"hasSecurityProgram":true,"hasPolicies":true,"hasRiskAssessment":false,"hasIncidentResponsePlan":true,"hasVendorManagement":false,"answersVersion":1}'::jsonb,
     'Synthetic application policy.',
     'Synthetic test context only.',
     '{"environment":"test","contains_secrets":false}'::jsonb,
-    'gemini-3.1-pro-preview',
+    'gemini-3.6-pro',
     'queued'
 );
 INSERT INTO canonical_quote_event (
@@ -153,15 +169,38 @@ INSERT INTO canonical_model_attempt (
     '20000000-0000-4000-8000-000000000002',
     'owner-a',
     'google-gemini',
-    'gemini-3.1-pro-preview',
+    'gemini-3.6-pro',
     'started'
 );
 COMMIT;
 SQL
 
+if psql "$TARGET" -v ON_ERROR_STOP=1 >/dev/null 2>&1 <<'SQL'
+INSERT INTO canonical_context (
+    id,
+    owner_subject,
+    name,
+    context_markdown,
+    context_json,
+    active
+) VALUES (
+    '10000000-0000-4000-8000-000000000006',
+    'owner-a',
+    'Conflicting active context',
+    '',
+    '{}'::jsonb,
+    TRUE
+);
+SQL
+then
+  echo "partial unique index accepted a second active context for one owner" >&2
+  exit 1
+fi
+
 for _cycle in 1 2 3; do
   apply_and_verify
-  assert_scalar 1 "SELECT count(*) FROM canonical_context WHERE id='10000000-0000-4000-8000-000000000001'"
+  assert_scalar 2 "SELECT count(*) FROM canonical_context WHERE owner_subject='owner-a'"
+  assert_scalar 1 "SELECT count(*) FROM canonical_context WHERE owner_subject='owner-a' AND active"
   assert_scalar 1 "SELECT count(*) FROM canonical_quote WHERE id='20000000-0000-4000-8000-000000000002'"
   assert_scalar 1 "SELECT count(*) FROM canonical_quote_event WHERE quote_id='20000000-0000-4000-8000-000000000002'"
   assert_scalar 1 "SELECT count(*) FROM canonical_model_attempt WHERE id='30000000-0000-4000-8000-000000000003'"
@@ -169,11 +208,13 @@ done
 
 query_as_subject() {
   local subject="$1"
-  psql "$TARGET" -Atq -v ON_ERROR_STOP=1 <<SQL | tail -n 1
+  psql "$TARGET" -Atq -v ON_ERROR_STOP=1 <<SQL | grep -E '^[0-9]+$' | tail -n 1
 BEGIN;
 SET LOCAL ROLE ${ROLE};
-SELECT set_config('app.current_subject', '${subject}', true);
-SELECT count(*) FROM canonical_quote;
+WITH configured AS (
+  SELECT set_config('app.current_subject', '${subject}', true)
+)
+SELECT count(*) FROM canonical_quote, configured;
 ROLLBACK;
 SQL
 }
@@ -209,7 +250,7 @@ INSERT INTO canonical_quote (
     '',
     '',
     '{}'::jsonb,
-    'gemini-3.1-pro-preview',
+    'gemini-3.6-pro',
     'queued'
 );
 ROLLBACK;
@@ -232,6 +273,6 @@ fi
 apply_and_verify
 assert_scalar 1 "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname='canonical_quote_owner_created_idx'"
 
-assert_scalar 1 "SELECT count(*) FROM canonical_quote WHERE request_json->>'organizationName'='Example Company' AND request_json->'frameworks' ? 'nist_800_53'"
+assert_scalar 1 "SELECT count(*) FROM canonical_quote WHERE request_json->>'organizationName'='Example Company' AND request_json->'frameworks' ? 'nist_800_53' AND gemini_model='gemini-3.6-pro'"
 
 echo "Canonical quote PostgreSQL readiness certification passed"
