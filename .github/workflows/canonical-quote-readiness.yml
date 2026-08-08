@@ -43,14 +43,13 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Check out the exact Canonical quote API candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          repository: canonical-cloud/canonical-api-server.rs
-          ref: 1bbdeec25cac0df54a337d0985381e0575e4b9d5
-          path: canonical-api
-          fetch-depth: 1
-          persist-credentials: false
+      - name: Fetch the exact public Canonical quote API candidate
+        shell: bash
+        run: >-
+          scripts/fetch-exact-public-source.sh
+          canonical-cloud/canonical-api-server.rs
+          7d22e2671366a2d978b697ea42b27e8e6f72e519
+          canonical-api
 
       - name: Verify immutable source, interface, model, and migration pins
         shell: bash
@@ -58,7 +57,7 @@ jobs:
           set -euo pipefail
           python3 scripts/verify-repository.py
           test "$(git -C canonical-api rev-parse HEAD)" = \
-            "1bbdeec25cac0df54a337d0985381e0575e4b9d5"
+            "7d22e2671366a2d978b697ea42b27e8e6f72e519"
           python3 - <<'PY'
           import hashlib
           import json
@@ -66,7 +65,7 @@ jobs:
 
           contract = json.loads(Path("canonical-quote-source.json").read_text())
           source = Path("canonical-api")
-          assert contract["sourceCommit"] == "1bbdeec25cac0df54a337d0985381e0575e4b9d5"
+          assert contract["sourceCommit"] == "7d22e2671366a2d978b697ea42b27e8e6f72e519"
           assert contract["dpmCommit"] == "d05a7880987ddaa271fa88b52c787390ef12b899"
           assert hashlib.sha256(
               (source / contract["schemaPath"]).read_bytes()

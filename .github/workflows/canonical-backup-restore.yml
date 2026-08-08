@@ -6,6 +6,7 @@ on:
       - ".github/workflows/canonical-backup-restore.yml"
       - "canonical-quote-source.json"
       - "scripts/build-dpm.sh"
+      - "scripts/fetch-exact-public-source.sh"
       - "scripts/test-canonical-backup-restore.sh"
       - "scripts/verify-repository.py"
       - "README.md"
@@ -16,6 +17,7 @@ on:
       - ".github/workflows/canonical-backup-restore.yml"
       - "canonical-quote-source.json"
       - "scripts/build-dpm.sh"
+      - "scripts/fetch-exact-public-source.sh"
       - "scripts/test-canonical-backup-restore.sh"
       - "scripts/verify-repository.py"
       - "README.md"
@@ -65,13 +67,13 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Check out the exact Canonical quote source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          repository: canonical-cloud/canonical-api-server.rs
-          ref: 1bbdeec25cac0df54a337d0985381e0575e4b9d5
-          path: vendor/canonical-api-server.rs
-          persist-credentials: false
+      - name: Fetch the exact public Canonical quote source
+        shell: bash
+        run: >-
+          scripts/fetch-exact-public-source.sh
+          canonical-cloud/canonical-api-server.rs
+          7d22e2671366a2d978b697ea42b27e8e6f72e519
+          vendor/canonical-api-server.rs
 
       - name: Install the pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
@@ -103,7 +105,7 @@ jobs:
 
           contract = json.loads(Path('canonical-quote-source.json').read_text())
           source = Path('vendor/canonical-api-server.rs')
-          assert contract['sourceCommit'] == '1bbdeec25cac0df54a337d0985381e0575e4b9d5'
+          assert contract['sourceCommit'] == '7d22e2671366a2d978b697ea42b27e8e6f72e519'
           assert contract['dpmCommit'] == 'd05a7880987ddaa271fa88b52c787390ef12b899'
           assert hashlib.sha256(
               (source / contract['schemaPath']).read_bytes()
