@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: canonical-cloud/canonical-api-server.rs
-          ref: 26967bed96b1b48ea846c3fd418018ea40f4b9e1
+          ref: 83dfc4537ce5254b0a5bf4c5853c9fd903b1295d
           path: vendor/canonical-api-server.rs
           persist-credentials: false
 
@@ -71,6 +71,9 @@ jobs:
           namespace = json.loads((source / 'db/namespace.json').read_text())
           assert namespace['declarativeMigration']['revision'] == contract['dpmCommit']
           assert namespace['namespaceId'] == 'canonical_cloud__quote'
+          assert namespace['readiness']['endpoint'] == '/readyz'
+          assert namespace['readiness']['runtimeRole'] == 'canonical_cloud__quote__api_rw'
+          assert namespace['readiness']['failClosed'] is True
           assert (source / contract['testScript']).is_file()
           PY
 
