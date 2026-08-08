@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: canonical-cloud/canonical-api-server.rs
-          ref: 1324de7ea50707097c299097890ff9e6ca86c587
+          ref: 4eb27ff78bc9cd93a81b8771710b56c18b41e7d3
           path: canonical-api
           fetch-depth: 1
           persist-credentials: false
@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C canonical-api rev-parse HEAD)" = \
-            "1324de7ea50707097c299097890ff9e6ca86c587"
+            "4eb27ff78bc9cd93a81b8771710b56c18b41e7d3"
           python3 - <<'PY'
           import json
           import subprocess
