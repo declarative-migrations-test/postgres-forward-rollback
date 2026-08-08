@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "canonical-cloud/canonical-api-server.rs",
-  "sourceCommit": "83dfc4537ce5254b0a5bf4c5853c9fd903b1295d",
+  "sourceCommit": "467545f9d69bf347f54f177ab4c9117bb0988ef0",
   "schemaPath": "db/schema.sql",
   "schemaSha256": "712f1269da3c8dfd381af9c69a81e549a4eb52be3e4f49558ec1a5edf205e191",
   "testScript": "scripts/test-declarative-postgres.sh",
