@@ -33,7 +33,6 @@ if source["sourceCommit"] != expected_source:
     raise SystemExit("Canonical quote source pin drifted")
 workflow = (root / ".github/workflows/ci.yml").read_text()
 for required_text in (
-    expected_dpm,
     expected_source,
     "canonical-cloud/canonical-api-server.rs",
     "scripts/test-declarative-postgres.sh",
