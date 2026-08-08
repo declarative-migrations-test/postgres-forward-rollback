@@ -21,6 +21,7 @@ required = [
     "production-dependency.json",
     "canonical-quote-source.json",
     "scripts/build-dpm.sh",
+    "scripts/fetch-exact-public-source.sh",
     "scripts/test-postgres-forward-rollback.sh",
     "scripts/test-canonical-backup-restore.sh",
     "scripts/test-canonical-quote-readiness.sh",
@@ -91,28 +92,45 @@ if observed_gitlink != expected_dpm:
         f"observed {observed_gitlink}"
     )
 
+fetch_helper = (root / "scripts/fetch-exact-public-source.sh").read_text()
+for required_text in (
+    'https://github.com/${repository}.git',
+    'fetch --quiet --no-tags --depth=1 origin "$commit"',
+    'checkout --quiet --detach FETCH_HEAD',
+    'rev-parse HEAD',
+    'remote remove origin',
+):
+    if required_text not in fetch_helper:
+        raise SystemExit(f"exact-source helper omits {required_text}")
+
 workflow = (root / ".github/workflows/ci.yml").read_text()
 for required_text in (
-    f"repository: {source['sourceRepository']}",
-    f"ref: {source['sourceCommit']}",
+    "scripts/fetch-exact-public-source.sh",
+    source["sourceRepository"],
+    source["sourceCommit"],
     source["testScript"],
     "persist-credentials: false",
 ):
     if required_text not in workflow:
         raise SystemExit(f"workflow omits {required_text}")
+if f"repository: {source['sourceRepository']}" in workflow:
+    raise SystemExit("workflow must not depend on cross-organization checkout credentials")
 
 backup_workflow = (root / ".github/workflows/canonical-backup-restore.yml").read_text()
 for required_text in (
     "postgres:17",
     "postgres:18",
-    f"repository: {source['sourceRepository']}",
-    f"ref: {source['sourceCommit']}",
+    "scripts/fetch-exact-public-source.sh",
+    source["sourceRepository"],
+    source["sourceCommit"],
     "scripts/test-canonical-backup-restore.sh",
     "persist-credentials: false",
     "contents: read",
 ):
     if required_text not in backup_workflow:
         raise SystemExit(f"backup/restore workflow omits {required_text}")
+if f"repository: {source['sourceRepository']}" in backup_workflow:
+    raise SystemExit("backup/restore must not depend on cross-organization checkout credentials")
 
 backup_script = (root / "scripts/test-canonical-backup-restore.sh").read_text()
 for required_text in (
@@ -136,8 +154,9 @@ readiness_workflow = (
 ).read_text()
 for required_text in (
     "postgres: ['17', '18']",
-    f"repository: {source['sourceRepository']}",
-    f"ref: {source['sourceCommit']}",
+    "scripts/fetch-exact-public-source.sh",
+    source["sourceRepository"],
+    source["sourceCommit"],
     "scripts/test-canonical-quote-readiness.sh",
     "cargo test --locked --all-targets",
     "cargo clippy --locked --all-targets",
@@ -150,6 +169,8 @@ for required_text in (
 ):
     if required_text not in readiness_workflow:
         raise SystemExit(f"readiness workflow omits {required_text}")
+if f"repository: {source['sourceRepository']}" in readiness_workflow:
+    raise SystemExit("readiness must not depend on cross-organization checkout credentials")
 if "gemini-3.6-pro" in readiness_workflow:
     raise SystemExit("readiness workflow contains unsupported Gemini model")
 
