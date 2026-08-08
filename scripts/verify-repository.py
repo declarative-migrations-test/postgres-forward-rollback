@@ -123,7 +123,7 @@ for required_text in (
     "canonical_cloud__quote__migrator",
     "canonical_cloud__quote__api_rw",
     "canonical_cloud__quote__web_ro",
-    "FORCE ROW LEVEL SECURITY",
+    "relforcerowsecurity",
     "--fail-on-diff",
 ):
     if required_text not in backup_script:
