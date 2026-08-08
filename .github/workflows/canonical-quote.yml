@@ -1,0 +1,106 @@
+name: Canonical quote PostgreSQL certification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canonical-quote-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  certify:
+    name: PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17', '18']
+    services:
+      postgres:
+        image: "postgres:${{ matrix.postgres }}"
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: quote-test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout migration certification harness
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Checkout exact Canonical quote API candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: canonical-cloud/canonical-api-server.rs
+          ref: edaa7a9eff402cd7d88dd76166d547acd76b6365
+          path: canonical-api
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify immutable source and migration pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C canonical-api rev-parse HEAD)" = \
+            "edaa7a9eff402cd7d88dd76166d547acd76b6365"
+          test "$(python3 -c 'import json; print(json.load(open("canonical-api/dpm.lock.json"))["tool"]["commit"])')" = \
+            "21eb846e356b2a5aff068b21e77903e6cca50452"
+          python3 scripts/verify-repository.py
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            vendor/declarative-postgres-migrate.rs -> target
+            canonical-api -> target
+          key: canonical-quote-pg${{ matrix.postgres }}
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Build pinned dpm
+        id: dpm
+        shell: bash
+        run: echo "path=$(scripts/build-dpm.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Format exact Canonical candidate
+        run: cargo fmt --manifest-path canonical-api/Cargo.toml --all -- --check
+
+      - name: Test exact Canonical candidate
+        run: cargo test --locked --all-targets --manifest-path canonical-api/Cargo.toml
+
+      - name: Lint exact Canonical candidate
+        run: cargo clippy --locked --all-targets --manifest-path canonical-api/Cargo.toml -- -D warnings
+
+      - name: Build exact Canonical candidate
+        run: cargo build --locked --manifest-path canonical-api/Cargo.toml --bin canonical-api-server
+
+      - name: Apply verify exercise drift and repair
+        env:
+          CANONICAL_API_DIR: ${{ github.workspace }}/canonical-api
+          DPM_BIN: ${{ steps.dpm.outputs.path }}
+          POSTGRES_ADMIN_URL: postgres://postgres:quote-test@localhost:5432/postgres
+          POSTGRES_MAJOR: ${{ matrix.postgres }}
+        run: bash scripts/test-canonical-quote-postgres.sh
