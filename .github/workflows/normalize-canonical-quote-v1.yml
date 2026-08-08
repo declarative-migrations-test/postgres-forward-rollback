@@ -1,0 +1,53 @@
+name: Normalize Canonical quote v1 test script
+
+on:
+  push:
+    branches: [agent/canonical-quote-v1-postgres-20260808]
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the dedicated test branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Apply the exact textual correction and parse the script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/test-canonical-quote-postgres.sh')
+          text = path.read_text()
+          old = 'test "$create_status" = "202"\\n\n'
+          new = 'test "$create_status" = "202"\n\n'
+          if text.count(old) != 1:
+              if text.count(new) == 1:
+                  raise SystemExit(0)
+              raise SystemExit('unexpected canonical quote script text')
+          path.write_text(text.replace(old, new))
+          PY
+          bash -n scripts/test-canonical-quote-postgres.sh
+          git diff --check
+
+      - name: Commit only when the correction is needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add scripts/test-canonical-quote-postgres.sh
+          if git diff --cached --quiet; then
+            echo 'canonical quote v1 script is already normalized'
+            exit 0
+          fi
+          git config user.name 'canonical-test-bot'
+          git config user.email 'canonical-test-bot@users.noreply.github.com'
+          git commit -m 'test: normalize canonical quote v1 script'
+          git push origin HEAD:agent/canonical-quote-v1-postgres-20260808
