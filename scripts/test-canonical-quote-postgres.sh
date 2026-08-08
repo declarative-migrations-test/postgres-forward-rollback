@@ -5,24 +5,32 @@ DPM="${DPM_BIN:?DPM_BIN is required}"
 API_DIR="${CANONICAL_API_DIR:?CANONICAL_API_DIR is required}"
 ADMIN="${POSTGRES_ADMIN_URL:-postgres://postgres:quote-test@localhost:5432/postgres}"
 PG_MAJOR="${POSTGRES_MAJOR:?POSTGRES_MAJOR is required}"
-DB="canonical_quote_pg${PG_MAJOR}"
+DB="canonical_quote_v1_pg${PG_MAJOR}"
 TARGET="postgres://postgres:quote-test@localhost:5432/${DB}"
 RUNTIME="postgres://canonical_api_server:runtime-test@localhost:5432/${DB}"
-SERVER_LOG="${RUNNER_TEMP:-/tmp}/canonical-quote-pg${PG_MAJOR}.log"
+TMP="${RUNNER_TEMP:-/tmp}"
+SERVER_LOG="$TMP/canonical-quote-v1-pg${PG_MAJOR}.log"
 SERVER_PID=""
 TOKEN="0123456789abcdef0123456789abcdef"
 BASE_URL="http://127.0.0.1:18081"
+CANONICAL_FIXTURE="$API_DIR/fixtures/quote/v1/request.json"
 
 cleanup() {
   if [[ -n "$SERVER_PID" ]]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
   fi
-  psql "$ADMIN" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${DB} WITH (FORCE)" >/dev/null 2>&1 || true
-  psql "$ADMIN" -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS canonical_api_server" >/dev/null 2>&1 || true
+  psql "$ADMIN" -v ON_ERROR_STOP=1 \
+    -c "DROP DATABASE IF EXISTS ${DB} WITH (FORCE)" >/dev/null 2>&1 || true
+  psql "$ADMIN" -v ON_ERROR_STOP=1 \
+    -c "DROP ROLE IF EXISTS canonical_api_server" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 cleanup
+
+test -f "$CANONICAL_FIXTURE"
+test "$(git -C "$API_DIR" hash-object fixtures/quote/v1/request.json)" = \
+  "fe8bf1ad08a7152d44ead22ee0d082842d28b208"
 
 psql "$ADMIN" -v ON_ERROR_STOP=1 <<SQL >/dev/null
 CREATE ROLE canonical_api_server
@@ -51,7 +59,8 @@ SQL
   --source-sql "$API_DIR/db/schema.sql" \
   --target "$TARGET" \
   --shadow "$ADMIN"
-psql "$TARGET" -v ON_ERROR_STOP=1 -f "$API_DIR/db/runtime-grants.sql" >/dev/null
+psql "$TARGET" -v ON_ERROR_STOP=1 \
+  -f "$API_DIR/db/runtime-grants.sql" >/dev/null
 
 # Runtime writes must fail closed until a transaction-local owner is set.
 if psql "$RUNTIME" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null 2>&1
@@ -70,6 +79,8 @@ then
   exit 1
 fi
 
+# Seed a canonical wire-format row and all child-table relationships directly
+# through the restricted runtime identity.
 psql "$RUNTIME" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 BEGIN;
 SELECT set_config('app.current_subject', 'owner-a', true);
@@ -96,7 +107,27 @@ INSERT INTO canonical_quote (
   '22222222-2222-4222-8222-222222222222',
   'owner-a',
   '11111111-1111-4111-8111-111111111111',
-  '{"frameworks":["soc2"],"organization":{"employee_count":42,"industry":"Software","legal_name":"Owner A"}}'::jsonb,
+  '{
+    "organizationName":"Owner A",
+    "contactName":"Owner A",
+    "contactEmail":"owner-a@example.test",
+    "website":"https://example.test",
+    "employeeCount":42,
+    "annualRevenueBand":"10m_50m",
+    "frameworks":["soc2_type_2"],
+    "currentStage":"readiness",
+    "infrastructure":["aws"],
+    "dataSensitivity":["confidential"],
+    "targetDate":"2026-12-31",
+    "hasSecurityProgram":true,
+    "hasPolicies":true,
+    "hasRiskAssessment":false,
+    "hasIncidentResponsePlan":true,
+    "hasVendorManagement":false,
+    "notes":"Direct persistence fixture",
+    "contextKey":"quote-analysis",
+    "answersVersion":1
+  }'::jsonb,
   '# application',
   '# Owner A',
   '{"region":"us"}'::jsonb,
@@ -214,7 +245,7 @@ RUST_LOG="canonical_api_server=info" \
 SERVER_PID="$!"
 
 for _ in $(seq 1 60); do
-  if curl --silent --fail "$BASE_URL/readyz" >"${RUNNER_TEMP:-/tmp}/ready.json"; then
+  if curl --silent --fail "$BASE_URL/readyz" >"$TMP/ready.json"; then
     break
   fi
   if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
@@ -227,38 +258,150 @@ curl --silent --fail "$BASE_URL/healthz" >/dev/null
 curl --silent --fail "$BASE_URL/readyz" \
   | python3 -c 'import json,sys; value=json.load(sys.stdin); assert value["status"] == "ready"; assert value["databaseReady"] is True'
 
-create_status="$(curl --silent --show-error --output "${RUNNER_TEMP:-/tmp}/quote-create.json" --write-out '%{http_code}' \
+# The canonical route must reject unauthenticated, legacy-private, and
+# caller-selected context shapes before accepting the exact golden fixture.
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  --request POST \
+  --header 'content-type: application/json' \
+  --data-binary "@$CANONICAL_FIXTURE" \
+  "$BASE_URL/api/v1/quotes")" = "401"
+
+cat >"$TMP/legacy-private-request.json" <<'JSON'
+{
+  "frameworks": ["soc2", "hipaa"],
+  "organization": {
+    "employee_count": 42,
+    "industry": "Software",
+    "legal_name": "Legacy API Owner"
+  },
+  "target_date": "2027-01-15"
+}
+JSON
+
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --request POST \
   --header 'content-type: application/json' \
   --header "x-canonical-internal-token: ${TOKEN}" \
   --header 'x-canonical-subject: owner-api' \
-  --data '{"frameworks":["soc2","hipaa"],"organization":{"employee_count":42,"industry":"Software","legal_name":"API Owner"},"target_date":"2027-01-15"}' \
-  "$BASE_URL/v1/quotes")"
-test "$create_status" = "202"
-quote_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["quote_id"])' "${RUNNER_TEMP:-/tmp}/quote-create.json")"
-python3 -c 'import uuid,sys; uuid.UUID(sys.argv[1])' "$quote_id"
+  --data-binary "@$TMP/legacy-private-request.json" \
+  "$BASE_URL/api/v1/quotes")" = "400"
+
+python3 - "$CANONICAL_FIXTURE" "$TMP/tampered-request.json" <<'PY'
+import json
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+value = json.loads(source.read_text())
+value['markdown_context'] = 'caller-selected context must be rejected'
+target.write_text(json.dumps(value, separators=(',', ':')))
+PY
+
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  --request POST \
+  --header 'content-type: application/json' \
+  --header "x-canonical-internal-token: ${TOKEN}" \
+  --header 'x-canonical-subject: owner-api' \
+  --data-binary "@$TMP/tampered-request.json" \
+  "$BASE_URL/api/v1/quotes")" = "400"
+
+create_status="$(curl --silent --show-error \
+  --output "$TMP/quote-create.json" \
+  --write-out '%{http_code}' \
+  --request POST \
+  --header 'content-type: application/json' \
+  --header "x-canonical-internal-token: ${TOKEN}" \
+  --header 'x-canonical-subject: owner-api' \
+  --data-binary "@$CANONICAL_FIXTURE" \
+  "$BASE_URL/api/v1/quotes")"
+test "$create_status" = "202"\n
+quote_id="$(python3 - "$TMP/quote-create.json" <<'PY'
+import datetime
+import json
+import pathlib
+import sys
+import uuid
+
+value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+quote_id = value['quoteId']
+uuid.UUID(quote_id)
+assert value['status'] == 'queued'
+assert value['streamUrl'] == f'/api/v1/quotes/{quote_id}/events'
+created_at = value['createdAt']
+parsed = datetime.datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+assert parsed.tzinfo is not None
+assert set(value) == {'quoteId', 'status', 'streamUrl', 'createdAt'}
+print(quote_id)
+PY
+)"
 
 for _ in $(seq 1 30); do
-  read_status="$(curl --silent --show-error --output "${RUNNER_TEMP:-/tmp}/quote-read.json" --write-out '%{http_code}' \
+  read_status="$(curl --silent --show-error \
+    --output "$TMP/quote-read.json" \
+    --write-out '%{http_code}' \
     --header "x-canonical-internal-token: ${TOKEN}" \
     --header 'x-canonical-subject: owner-api' \
-    "$BASE_URL/v1/quotes/${quote_id}")"
+    "$BASE_URL/api/v1/quotes/${quote_id}")"
   if [[ "$read_status" == "200" ]]; then
     break
   fi
   sleep 1
 done
 test "$read_status" = "200"
-python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["persistence"] == "postgres"' "${RUNNER_TEMP:-/tmp}/quote-read.json"
+python3 - "$TMP/quote-read.json" <<'PY'
+import json
+import pathlib
+import sys
+
+value = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert value['persistence'] == 'postgres'
+assert value['organization_name'] == 'Example Company'
+assert value['frameworks'] == [
+    'soc2_type_2',
+    'nist_csf_2',
+    'nist_800_53',
+    'hipaa',
+]
+PY
 
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --header "x-canonical-internal-token: ${TOKEN}" \
   --header 'x-canonical-subject: owner-b' \
-  "$BASE_URL/v1/quotes/${quote_id}")" = "404"
+  "$BASE_URL/api/v1/quotes/${quote_id}")" = "404"
 
-# Prove the readiness endpoint is schema-aware and that dpm detects and repairs
-# policy drift without losing quote data.
-psql "$TARGET" -v ON_ERROR_STOP=1 -c "DROP POLICY canonical_quote_owner_policy ON canonical_quote" >/dev/null
+list_status="$(curl --silent --show-error \
+  --output "$TMP/quote-list.json" \
+  --write-out '%{http_code}' \
+  --header "x-canonical-internal-token: ${TOKEN}" \
+  --header 'x-canonical-subject: owner-api' \
+  "$BASE_URL/api/v1/quotes")"
+test "$list_status" = "200"
+python3 - "$TMP/quote-list.json" "$quote_id" <<'PY'
+import json
+import pathlib
+import sys
+
+quotes = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert len(quotes) == 1
+assert quotes[0]['quote_id'] == sys.argv[2]
+assert quotes[0]['organization_name'] == 'Example Company'
+assert quotes[0]['persistence'] == 'postgres'
+PY
+
+# Prove the persisted wire request is canonical and the selected context remains
+# server-owned.
+test "$(psql "$TARGET" -Atqc "SELECT request_json->>'organizationName' FROM canonical_quote WHERE id='${quote_id}'")" = "Example Company"
+test "$(psql "$TARGET" -Atqc "SELECT request_json->>'answersVersion' FROM canonical_quote WHERE id='${quote_id}'")" = "1"
+test "$(psql "$TARGET" -Atqc "SELECT request_json ? 'organization' FROM canonical_quote WHERE id='${quote_id}'")" = "f"
+test "$(psql "$TARGET" -Atqc "SELECT request_json ? 'markdown_context' FROM canonical_quote WHERE id='${quote_id}'")" = "f"
+test "$(psql "$TARGET" -Atqc "SELECT context_record_id = '55555555-5555-4555-8555-555555555555'::uuid FROM canonical_quote WHERE id='${quote_id}'")" = "t"
+test "$(psql "$TARGET" -Atqc "SELECT application_context_markdown <> '' FROM canonical_quote WHERE id='${quote_id}'")" = "t"
+
+# Prove readiness is schema-aware and DPM detects and repairs policy drift
+# without losing canonical quote data.
+psql "$TARGET" -v ON_ERROR_STOP=1 \
+  -c "DROP POLICY canonical_quote_owner_policy ON canonical_quote" >/dev/null
 
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$BASE_URL/readyz")" = "503"
 if "$DPM" diff \
@@ -266,7 +409,7 @@ if "$DPM" diff \
   --target "$TARGET" \
   --shadow "$ADMIN" \
   --fail-on-diff \
-  >"${RUNNER_TEMP:-/tmp}/canonical-quote-drift.sql" 2>&1
+  >"$TMP/canonical-quote-v1-drift.sql" 2>&1
 then
   echo "dpm failed to detect removed RLS policy" >&2
   exit 1
@@ -297,4 +440,5 @@ done
 curl --silent --fail "$BASE_URL/readyz" >/dev/null
 
 test "$(psql "$TARGET" -Atqc "SELECT count(*) FROM canonical_quote WHERE id='${quote_id}'")" = "1"
-printf 'Canonical quote PostgreSQL %s certification passed.\n' "$PG_MAJOR"
+test "$(psql "$TARGET" -Atqc "SELECT request_json->>'organizationName' FROM canonical_quote WHERE id='${quote_id}'")" = "Example Company"
+printf 'Canonical quote v1 PostgreSQL %s certification passed.\n' "$PG_MAJOR"
