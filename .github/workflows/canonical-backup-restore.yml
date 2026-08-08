@@ -69,7 +69,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: canonical-cloud/canonical-api-server.rs
-          ref: 5bf98beb59ec9337cdc45c9b06778e5889dba939
+          ref: 1bbdeec25cac0df54a337d0985381e0575e4b9d5
           path: vendor/canonical-api-server.rs
           persist-credentials: false
 
@@ -103,7 +103,7 @@ jobs:
 
           contract = json.loads(Path('canonical-quote-source.json').read_text())
           source = Path('vendor/canonical-api-server.rs')
-          assert contract['sourceCommit'] == '5bf98beb59ec9337cdc45c9b06778e5889dba939'
+          assert contract['sourceCommit'] == '1bbdeec25cac0df54a337d0985381e0575e4b9d5'
           assert contract['dpmCommit'] == 'd05a7880987ddaa271fa88b52c787390ef12b899'
           assert hashlib.sha256(
               (source / contract['schemaPath']).read_bytes()
