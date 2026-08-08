@@ -315,7 +315,8 @@ create_status="$(curl --silent --show-error \
   --header 'x-canonical-subject: owner-api' \
   --data-binary "@$CANONICAL_FIXTURE" \
   "$BASE_URL/api/v1/quotes")"
-test "$create_status" = "202"\n
+test "$create_status" = "202"
+
 quote_id="$(python3 - "$TMP/quote-create.json" <<'PY'
 import datetime
 import json
