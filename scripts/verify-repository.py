@@ -5,21 +5,46 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 manifest = json.loads((root / "bootstrap-manifest.json").read_text())
+source = json.loads((root / "canonical-quote-source.json").read_text())
 required = [
     "README.md",
     "AGENTS.md",
     "LICENSE",
     ".gitmodules",
     "bootstrap-manifest.json",
+    "production-dependency.json",
+    "canonical-quote-source.json",
     "scripts/build-dpm.sh",
+    "scripts/test-postgres-forward-rollback.sh",
 ]
 missing = [path for path in required if not (root / path).exists()]
 if missing:
     raise SystemExit(f"missing required files: {missing}")
-if manifest["production_dependency"]["commit"] != "21eb846e356b2a5aff068b21e77903e6cca50452":
+expected_dpm = "d05a7880987ddaa271fa88b52c787390ef12b899"
+expected_source = "5de04889e23e69b1a0daba48ce62eb7f95ec6194"
+if manifest["production_dependency"]["commit"] != expected_dpm:
     raise SystemExit("production dependency pin drifted")
+dependency = json.loads((root / "production-dependency.json").read_text())
+if dependency["commit"] != expected_dpm:
+    raise SystemExit("production dependency ledger drifted")
+if source["dpmCommit"] != expected_dpm:
+    raise SystemExit("Canonical quote dpm pin drifted")
+if source["sourceCommit"] != expected_source:
+    raise SystemExit("Canonical quote source pin drifted")
+workflow = (root / ".github/workflows/ci.yml").read_text()
+for required_text in (
+    expected_source,
+    "canonical-cloud/canonical-api-server.rs",
+    "scripts/test-declarative-postgres.sh",
+    "persist-credentials: false",
+):
+    if required_text not in workflow:
+        raise SystemExit(f"workflow omits {required_text}")
 for path in root.rglob("*"):
-    if not path.is_file() or ".git" in path.parts or path.stat().st_size > 1_000_000:
+    relative = path.relative_to(root)
+    if not path.is_file() or ".git" in relative.parts or "vendor" in relative.parts:
+        continue
+    if path.stat().st_size > 1_000_000:
         continue
     try:
         text = path.read_text()
