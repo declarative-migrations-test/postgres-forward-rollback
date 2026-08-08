@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 DPM="${DPM_BIN:?DPM_BIN is required}"
-ADMIN="${POSTGRES_ADMIN_URL:-postgres://postgres@localhost:5432/postgres}"
+ADMIN="${POSTGRES_ADMIN_URL:-postgres://postgres:postgres@localhost:5432/postgres}"
 DB="dm_postgres_forward_rollback"
-TARGET="postgres://postgres@localhost:5432/${DB}"
+TARGET="${POSTGRES_TARGET_URL:-postgres://postgres:postgres@localhost:5432/${DB}}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cleanup() { psql "$ADMIN" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${DB} WITH (FORCE)" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -26,7 +26,6 @@ for cycle in 1 2 3; do
   apply v2
   apply v1 --allow-destructive
   test "$(psql "$TARGET" -Atqc "SELECT count(*) FROM app.accounts WHERE id='acct-${cycle}'")" = "1"
-  test "$(psql "$TARGET" -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='app' AND table_name='account_events'")" = "0"
   test "$(psql "$TARGET" -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema='app' AND table_name='account_events'")" = "0"
   test "$(psql "$TARGET" -Atqc "SELECT count(*) FROM information_schema.columns WHERE table_schema='app' AND table_name='accounts' AND column_name IN ('status','updated_at')")" = "0"
 done
