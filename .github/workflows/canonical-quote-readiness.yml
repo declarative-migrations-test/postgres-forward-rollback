@@ -47,18 +47,18 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: canonical-cloud/canonical-api-server.rs
-          ref: 83dfc4537ce5254b0a5bf4c5853c9fd903b1295d
+          ref: 467545f9d69bf347f54f177ab4c9117bb0988ef0
           path: canonical-api
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify immutable source and migration pins
+      - name: Verify immutable source, interface, model, and migration pins
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/verify-repository.py
           test "$(git -C canonical-api rev-parse HEAD)" = \
-            "83dfc4537ce5254b0a5bf4c5853c9fd903b1295d"
+            "467545f9d69bf347f54f177ab4c9117bb0988ef0"
           python3 - <<'PY'
           import hashlib
           import json
@@ -66,17 +66,36 @@ jobs:
 
           contract = json.loads(Path("canonical-quote-source.json").read_text())
           source = Path("canonical-api")
-          assert contract["sourceCommit"] == "83dfc4537ce5254b0a5bf4c5853c9fd903b1295d"
+          assert contract["sourceCommit"] == "467545f9d69bf347f54f177ab4c9117bb0988ef0"
           assert contract["dpmCommit"] == "d05a7880987ddaa271fa88b52c787390ef12b899"
           assert hashlib.sha256(
               (source / contract["schemaPath"]).read_bytes()
           ).hexdigest() == contract["schemaSha256"]
+
           namespace = json.loads((source / "db/namespace.json").read_text())
           assert namespace["namespaceId"] == "canonical_cloud__quote"
           assert namespace["declarativeMigration"]["revision"] == contract["dpmCommit"]
           assert namespace["readiness"]["endpoint"] == "/readyz"
           assert namespace["readiness"]["runtimeRole"] == "canonical_cloud__quote__api_rw"
           assert namespace["readiness"]["failClosed"] is True
+
+          interfaces = json.loads((source / "interfaces.lock.json").read_text())
+          assert interfaces["canonical_lib"]["commit"] == "f0add30d4cc7e6825d24565e1db115751f833966"
+          assert interfaces["canonical_interfaces"]["commit"] == "4c6ca63ca24fa214a1cb1a917ac27f1d5265916a"
+          fixture = source / interfaces["canonical_interfaces"]["quote_request_fixture"]["path"]
+          assert fixture.is_file()
+          assert hashlib.sha1((b"blob " + str(fixture.stat().st_size).encode() + b"\0" + fixture.read_bytes())).hexdigest() == \
+              interfaces["canonical_interfaces"]["quote_request_fixture"]["git_blob"]
+
+          library = (source / "src/lib.rs").read_text()
+          gemini = (source / "src/gemini.rs").read_text()
+          env_example = (source / ".env.example").read_text()
+          assert 'DEFAULT_GEMINI_MODEL: &str = "gemini-3.6-flash"' in library
+          assert 'gemini-3.6-pro' not in library
+          assert 'GEMINI_MODEL=gemini-3.6-flash' in env_example
+          assert '"thinkingLevel": "high"' in gemini
+          assert '"responseFormat"' in gemini
+          assert 'analysis_schema()' in gemini
           PY
 
       - name: Install Rust 1.95.0
@@ -91,7 +110,7 @@ jobs:
           workspaces: |
             vendor/declarative-postgres-migrate.rs -> target
             canonical-api -> target
-          key: canonical-quote-readiness-pg${{ matrix.postgres }}
+          key: canonical-quote-v1-readiness-pg${{ matrix.postgres }}
 
       - name: Install PostgreSQL client
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
@@ -115,7 +134,7 @@ jobs:
       - name: Build exact Canonical API binary
         run: cargo build --locked --manifest-path canonical-api/Cargo.toml --bin canonical-api-server
 
-      - name: Apply, exercise, drift, repair, and certify readiness
+      - name: Apply, exercise quote v1, drift, repair, and certify readiness
         env:
           CANONICAL_API_DIR: ${{ github.workspace }}/canonical-api
           DPM_BIN: ${{ steps.dpm.outputs.path }}
@@ -127,7 +146,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: canonical-quote-readiness-pg${{ matrix.postgres }}
+          name: canonical-quote-v1-readiness-pg${{ matrix.postgres }}
           path: artifacts/canonical-quote-readiness/pg${{ matrix.postgres }}
           if-no-files-found: warn
           retention-days: 14
