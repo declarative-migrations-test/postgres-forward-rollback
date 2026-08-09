@@ -431,7 +431,7 @@ test "$(
     "SELECT request_json->>'contactEmail'
      FROM canonical_cloud__quote.canonical_quote
      WHERE id = '${quote_id}'"
-)" = "taylor@example.com"
+)" = "security@example.com"
 
 test "$(
   psql "$TARGET_ADMIN_URL" -Atqc \
