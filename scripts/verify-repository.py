@@ -191,8 +191,12 @@ for required_text in (
         raise SystemExit(f"readiness workflow omits {required_text}")
 if f"repository: {source['sourceRepository']}" in readiness_workflow:
     raise SystemExit("readiness must not depend on cross-organization checkout credentials")
-if "gemini-3.6-pro" in readiness_workflow:
-    raise SystemExit("readiness workflow contains unsupported Gemini model")
+for active_pro_pattern in (
+    r"GEMINI_MODEL\s*=\s*gemini-3\.6-pro",
+    r"DEFAULT_GEMINI_MODEL[^\n]*=\s*\\?[\"']gemini-3\.6-pro",
+):
+    if re.search(active_pro_pattern, readiness_workflow):
+        raise SystemExit("readiness workflow actively selects the unsupported Gemini model")
 
 readiness_script = (
     root / "scripts/test-canonical-quote-readiness.sh"
