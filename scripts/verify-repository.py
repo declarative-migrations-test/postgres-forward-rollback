@@ -16,12 +16,14 @@ required = [
     ".gitmodules",
     ".github/workflows/ci.yml",
     ".github/workflows/canonical-backup-restore.yml",
+    ".github/workflows/canonical-quote-readiness.yml",
     "bootstrap-manifest.json",
     "production-dependency.json",
     "canonical-quote-source.json",
     "scripts/build-dpm.sh",
     "scripts/test-postgres-forward-rollback.sh",
     "scripts/test-canonical-backup-restore.sh",
+    "scripts/test-canonical-quote-readiness.sh",
 ]
 missing = [path for path in required if not (root / path).exists()]
 if missing:
@@ -128,6 +130,38 @@ for required_text in (
 ):
     if required_text not in backup_script:
         raise SystemExit(f"backup/restore script omits {required_text}")
+
+readiness_workflow = (
+    root / ".github/workflows/canonical-quote-readiness.yml"
+).read_text()
+for required_text in (
+    "postgres: ['17', '18']",
+    f"repository: {source['sourceRepository']}",
+    f"ref: {source['sourceCommit']}",
+    "scripts/test-canonical-quote-readiness.sh",
+    "cargo test --locked --all-targets",
+    "cargo clippy --locked --all-targets",
+    "persist-credentials: false",
+    "contents: read",
+):
+    if required_text not in readiness_workflow:
+        raise SystemExit(f"readiness workflow omits {required_text}")
+
+readiness_script = (
+    root / "scripts/test-canonical-quote-readiness.sh"
+).read_text()
+for required_text in (
+    "/readyz",
+    "canonical_cloud__quote__api_rw",
+    "canonical_cloud__quote__migrator",
+    "cross-owner-event",
+    "cross-owner-model",
+    "BYPASSRLS",
+    "DROP POLICY canonical_quote_owner_policy",
+    "--fail-on-diff",
+):
+    if required_text not in readiness_script:
+        raise SystemExit(f"readiness script omits {required_text}")
 
 credential = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY")
 for path in tracked_files:
