@@ -1,9 +1,9 @@
 {
   "bootstrap_date": "2026-08-04",
-  "description": "Repeated forward and destructive rollback certification against live PostgreSQL with schema convergence and data-preservation assertions.",
+  "description": "Repeated forward and destructive rollback certification against live PostgreSQL, including the Canonical quote schema, role isolation, RLS, drift gates, and data preservation.",
   "organization": "declarative-migrations-test",
   "production_dependency": {
-    "commit": "21eb846e356b2a5aff068b21e77903e6cca50452",
+    "commit": "d05a7880987ddaa271fa88b52c787390ef12b899",
     "path": "vendor/declarative-postgres-migrate.rs",
     "repository": "declarative-migrations/declarative-postgres-migrate.rs",
     "transport": "git-submodule"
