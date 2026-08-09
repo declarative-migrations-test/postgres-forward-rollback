@@ -21,6 +21,7 @@ required = [
     "production-dependency.json",
     "canonical-quote-source.json",
     "scripts/build-dpm.sh",
+    "scripts/fetch-exact-public-source.sh",
     "scripts/test-postgres-forward-rollback.sh",
     "scripts/test-canonical-backup-restore.sh",
     "scripts/test-canonical-quote-readiness.sh",
@@ -91,28 +92,65 @@ if observed_gitlink != expected_dpm:
         f"observed {observed_gitlink}"
     )
 
+
+def normalize_shell_commands(text: str) -> str:
+    """Collapse shell continuations and whitespace without changing semantics."""
+    commands: list[str] = []
+    current: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        continued = line.endswith("\\")
+        current.append(line[:-1].rstrip() if continued else line)
+        if not continued:
+            commands.append(" ".join(" ".join(current).split()))
+            current = []
+    if current:
+        commands.append(" ".join(" ".join(current).split()))
+    return "\n".join(commands)
+
+
+fetch_helper = (root / "scripts/fetch-exact-public-source.sh").read_text()
+normalized_fetch_helper = normalize_shell_commands(fetch_helper)
+for required_text in (
+    'https://github.com/${repository}.git',
+    'fetch --quiet --no-tags --depth=1 origin "$commit"',
+    'checkout --quiet --detach FETCH_HEAD',
+    'rev-parse HEAD',
+    'remote remove origin',
+):
+    if required_text not in normalized_fetch_helper:
+        raise SystemExit(f"exact-source helper omits {required_text}")
+
 workflow = (root / ".github/workflows/ci.yml").read_text()
 for required_text in (
-    f"repository: {source['sourceRepository']}",
-    f"ref: {source['sourceCommit']}",
+    "scripts/fetch-exact-public-source.sh",
+    source["sourceRepository"],
+    source["sourceCommit"],
     source["testScript"],
     "persist-credentials: false",
 ):
     if required_text not in workflow:
         raise SystemExit(f"workflow omits {required_text}")
+if f"repository: {source['sourceRepository']}" in workflow:
+    raise SystemExit("workflow must not depend on cross-organization checkout credentials")
 
 backup_workflow = (root / ".github/workflows/canonical-backup-restore.yml").read_text()
 for required_text in (
     "postgres:17",
     "postgres:18",
-    f"repository: {source['sourceRepository']}",
-    f"ref: {source['sourceCommit']}",
+    "scripts/fetch-exact-public-source.sh",
+    source["sourceRepository"],
+    source["sourceCommit"],
     "scripts/test-canonical-backup-restore.sh",
     "persist-credentials: false",
     "contents: read",
 ):
     if required_text not in backup_workflow:
         raise SystemExit(f"backup/restore workflow omits {required_text}")
+if f"repository: {source['sourceRepository']}" in backup_workflow:
+    raise SystemExit("backup/restore must not depend on cross-organization checkout credentials")
 
 backup_script = (root / "scripts/test-canonical-backup-restore.sh").read_text()
 for required_text in (
@@ -136,32 +174,52 @@ readiness_workflow = (
 ).read_text()
 for required_text in (
     "postgres: ['17', '18']",
-    f"repository: {source['sourceRepository']}",
-    f"ref: {source['sourceCommit']}",
+    "scripts/fetch-exact-public-source.sh",
+    source["sourceRepository"],
+    source["sourceCommit"],
     "scripts/test-canonical-quote-readiness.sh",
     "cargo test --locked --all-targets",
     "cargo clippy --locked --all-targets",
+    "interfaces.lock.json",
+    "gemini-3.6-flash",
+    "thinkingLevel",
+    "responseFormat",
     "persist-credentials: false",
     "contents: read",
 ):
     if required_text not in readiness_workflow:
         raise SystemExit(f"readiness workflow omits {required_text}")
+if f"repository: {source['sourceRepository']}" in readiness_workflow:
+    raise SystemExit("readiness must not depend on cross-organization checkout credentials")
+for active_pro_pattern in (
+    r"GEMINI_MODEL\s*=\s*gemini-3\.6-pro",
+    r"DEFAULT_GEMINI_MODEL[^\n]*=\s*\\?[\"']gemini-3\.6-pro",
+):
+    if re.search(active_pro_pattern, readiness_workflow):
+        raise SystemExit("readiness workflow actively selects the unsupported Gemini model")
 
 readiness_script = (
     root / "scripts/test-canonical-quote-readiness.sh"
 ).read_text()
 for required_text in (
     "/readyz",
+    "/api/v1/quotes",
+    "quoteId",
+    "streamUrl",
+    "createdAt",
     "canonical_cloud__quote__api_rw",
     "canonical_cloud__quote__migrator",
     "cross-owner-event",
     "cross-owner-model",
+    "gemini-3.6-flash",
     "BYPASSRLS",
     "DROP POLICY canonical_quote_owner_policy",
     "--fail-on-diff",
 ):
     if required_text not in readiness_script:
         raise SystemExit(f"readiness script omits {required_text}")
+if "gemini-3.6-pro" in readiness_script:
+    raise SystemExit("readiness script contains unsupported Gemini model")
 
 credential = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY")
 for path in tracked_files:

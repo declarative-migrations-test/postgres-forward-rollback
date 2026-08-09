@@ -5,7 +5,7 @@ DPM="${DPM_BIN:?DPM_BIN is required}"
 API_DIR="${CANONICAL_API_DIR:?CANONICAL_API_DIR is required}"
 POSTGRES_MAJOR="${POSTGRES_MAJOR:?POSTGRES_MAJOR is required}"
 POSTGRES_ADMIN_URL="${POSTGRES_ADMIN_URL:-postgres://postgres@127.0.0.1:5432/postgres}"
-TEST_DATABASE="canonical_quote_ready_pg${POSTGRES_MAJOR}"
+TEST_DATABASE="canonical_quote_v1_ready_pg${POSTGRES_MAJOR}"
 TARGET_ADMIN_URL="postgres://postgres@127.0.0.1:5432/${TEST_DATABASE}"
 MIGRATOR_URL="postgres://canonical_cloud__quote__migrator@127.0.0.1:5432/${TEST_DATABASE}"
 API_URL="postgres://canonical_cloud__quote__api_rw@127.0.0.1:5432/${TEST_DATABASE}"
@@ -149,11 +149,11 @@ VALUES (
     '22222222-2222-4222-8222-222222222222',
     'owner-a',
     '11111111-1111-4111-8111-111111111111',
-    '{"frameworks":["soc2"],"organization":{"employee_count":42,"industry":"Software","legal_name":"Owner A"}}'::jsonb,
+    '{"frameworks":["soc2"],"organizationName":"Owner A"}'::jsonb,
     '# application',
     '# Owner A',
     '{"region":"us"}'::jsonb,
-    'gemini-3.6-pro',
+    'gemini-3.6-flash',
     'queued'
 );
 COMMIT;
@@ -203,7 +203,7 @@ VALUES (
     '33333333-3333-4333-8333-333333333333',
     '22222222-2222-4222-8222-222222222222',
     'owner-b',
-    'gemini-3.6-pro',
+    'gemini-3.6-flash',
     'started'
 );
 COMMIT;
@@ -257,7 +257,7 @@ VALUES (
     '55555555-5555-4555-8555-555555555555',
     '22222222-2222-4222-8222-222222222222',
     'owner-a',
-    'gemini-3.6-pro',
+    'gemini-3.6-flash',
     'started',
     CURRENT_TIMESTAMP
 );
@@ -284,7 +284,7 @@ VALUES (
     'owner-api',
     'API context',
     '# API context',
-    '{"region":"us"}'::jsonb
+    '{"region":"us","program":"quote-v1"}'::jsonb
 );
 COMMIT;
 SQL
@@ -292,7 +292,6 @@ SQL
 DATABASE_URL="$API_URL" \
 CANONICAL_INTERNAL_AUTH_TOKEN="$TOKEN" \
 BIND_ADDRESS="127.0.0.1:18081" \
-GEMINI_MODEL="gemini-3.6-pro" \
 RUST_LOG="canonical_api_server=info" \
 "$API_DIR/target/debug/canonical-api-server" \
   >"$SERVER_LOG" 2>&1 &
@@ -301,10 +300,29 @@ SERVER_PID="$!"
 wait_for_status "200" "/healthz"
 wait_for_status "200" "/readyz"
 
-curl --silent --fail "${BASE_URL}/readyz" |
-  python3 -c \
-    'import json,sys; value=json.load(sys.stdin); assert value["status"] == "ready"; assert value["databaseReady"] is True'
+curl --silent --fail "${BASE_URL}/healthz" >"${ARTIFACTS}/health.json"
+python3 - "${ARTIFACTS}/health.json" <<'PY'
+import json
+import sys
 
+value = json.load(open(sys.argv[1]))
+assert value["status"] == "ok"
+assert value["databaseConfigured"] is True
+assert value["geminiConfigured"] is False
+assert value["geminiModel"] == "gemini-3.6-flash"
+PY
+
+curl --silent --fail "${BASE_URL}/readyz" >"${ARTIFACTS}/ready.json"
+python3 - "${ARTIFACTS}/ready.json" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1]))
+assert value["status"] == "ready"
+assert value["databaseReady"] is True
+PY
+
+# The immutable canonical fixture is the external wire contract.
 create_status="$(
   curl --silent --show-error \
     --output "${ARTIFACTS}/quote-create.json" \
@@ -313,26 +331,51 @@ create_status="$(
     --header 'content-type: application/json' \
     --header "x-canonical-internal-token: ${TOKEN}" \
     --header 'x-canonical-subject: owner-api' \
-    --data '{
-      "frameworks":["soc2","hipaa"],
-      "notes":"External exact-head PostgreSQL readiness certification",
-      "organization":{
-        "employee_count":42,
-        "industry":"Software",
-        "legal_name":"API Owner"
-      },
-      "target_date":"2027-01-15"
-    }' \
-    "${BASE_URL}/v1/quotes"
+    --data-binary "@${API_DIR}/fixtures/quote/v1/request.json" \
+    "${BASE_URL}/api/v1/quotes"
 )"
 test "$create_status" = "202"
 
 quote_id="$(
-  python3 -c \
-    'import json,sys; print(json.load(open(sys.argv[1]))["quote_id"])' \
-    "${ARTIFACTS}/quote-create.json"
+  python3 - "${ARTIFACTS}/quote-create.json" <<'PY'
+import json
+import sys
+import uuid
+
+value = json.load(open(sys.argv[1]))
+quote_id = value["quoteId"]
+uuid.UUID(quote_id)
+assert value["status"] == "queued"
+assert value["streamUrl"] == f"/api/v1/quotes/{quote_id}/events"
+assert value["createdAt"].endswith("Z")
+assert set(value) == {"quoteId", "status", "streamUrl", "createdAt"}
+print(quote_id)
+PY
 )"
-python3 -c 'import uuid,sys; uuid.UUID(sys.argv[1])' "$quote_id"
+
+# Server-owned context fields and unknown fields are rejected by the canonical
+# request parser rather than being accepted and ignored.
+python3 - "$API_DIR/fixtures/quote/v1/request.json" \
+  "${ARTIFACTS}/quote-forbidden-context.json" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1]))
+value["contextRecordId"] = "attacker-selected"
+json.dump(value, open(sys.argv[2], "w"))
+PY
+
+test "$(
+  curl --silent --show-error \
+    --output "${ARTIFACTS}/quote-forbidden-context-response.json" \
+    --write-out '%{http_code}' \
+    --request POST \
+    --header 'content-type: application/json' \
+    --header "x-canonical-internal-token: ${TOKEN}" \
+    --header 'x-canonical-subject: owner-api' \
+    --data-binary "@${ARTIFACTS}/quote-forbidden-context.json" \
+    "${BASE_URL}/api/v1/quotes"
+)" = "400"
 
 read_status=""
 for _ in $(seq 1 30); do
@@ -342,7 +385,7 @@ for _ in $(seq 1 30); do
       --write-out '%{http_code}' \
       --header "x-canonical-internal-token: ${TOKEN}" \
       --header 'x-canonical-subject: owner-api' \
-      "${BASE_URL}/v1/quotes/${quote_id}"
+      "${BASE_URL}/api/v1/quotes/${quote_id}"
   )"
   if [[ "$read_status" == "200" ]]; then
     break
@@ -350,16 +393,52 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 test "$read_status" = "200"
-python3 -c \
-  'import json,sys; value=json.load(open(sys.argv[1])); assert value["persistence"] == "postgres"' \
-  "${ARTIFACTS}/quote-read.json"
+python3 - "${ARTIFACTS}/quote-read.json" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1]))
+assert value["persistence"] == "postgres"
+assert value["gemini_model"] == "gemini-3.6-flash"
+assert value["organization_name"] == "Example Company"
+PY
+
+# Compatibility aliases remain readable while the canonical route is primary.
+test "$(
+  curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header "x-canonical-internal-token: ${TOKEN}" \
+    --header 'x-canonical-subject: owner-api' \
+    "${BASE_URL}/v1/quotes/${quote_id}"
+)" = "200"
 
 test "$(
   curl --silent --output /dev/null --write-out '%{http_code}' \
     --header "x-canonical-internal-token: ${TOKEN}" \
     --header 'x-canonical-subject: owner-b' \
-    "${BASE_URL}/v1/quotes/${quote_id}"
+    "${BASE_URL}/api/v1/quotes/${quote_id}"
 )" = "404"
+
+# Confirm the canonical wire object and model are what PostgreSQL stored.
+test "$(
+  psql "$TARGET_ADMIN_URL" -Atqc \
+    "SELECT request_json->>'organizationName'
+     FROM canonical_cloud__quote.canonical_quote
+     WHERE id = '${quote_id}'"
+)" = "Example Company"
+
+test "$(
+  psql "$TARGET_ADMIN_URL" -Atqc \
+    "SELECT request_json->>'contactEmail'
+     FROM canonical_cloud__quote.canonical_quote
+     WHERE id = '${quote_id}'"
+)" = "security@example.com"
+
+test "$(
+  psql "$TARGET_ADMIN_URL" -Atqc \
+    "SELECT gemini_model
+     FROM canonical_cloud__quote.canonical_quote
+     WHERE id = '${quote_id}'"
+)" = "gemini-3.6-flash"
 
 # Readiness must reject a privileged runtime identity even while the database
 # remains reachable.
@@ -419,7 +498,9 @@ wait_for_status "200" "/readyz"
 test "$(
   psql "$TARGET_ADMIN_URL" -Atqc \
     "SELECT count(*) FROM canonical_cloud__quote.canonical_quote
-     WHERE id = '${quote_id}'"
+     WHERE id = '${quote_id}'
+       AND gemini_model = 'gemini-3.6-flash'
+       AND request_json->>'organizationName' = 'Example Company'"
 )" = "1"
 
 test "$(
@@ -429,5 +510,5 @@ test "$(
 )" = "1"
 
 printf \
-  'Canonical quote exact-head PostgreSQL %s readiness certification passed.\n' \
+  'Canonical quote-v1 exact-head PostgreSQL %s readiness certification passed.\n' \
   "$POSTGRES_MAJOR"

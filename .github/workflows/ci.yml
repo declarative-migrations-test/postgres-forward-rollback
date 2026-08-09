@@ -37,13 +37,13 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Check out the exact Canonical quote source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          repository: canonical-cloud/canonical-api-server.rs
-          ref: 83dfc4537ce5254b0a5bf4c5853c9fd903b1295d
-          path: vendor/canonical-api-server.rs
-          persist-credentials: false
+      - name: Fetch the exact public Canonical quote source
+        shell: bash
+        run: >-
+          scripts/fetch-exact-public-source.sh
+          canonical-cloud/canonical-api-server.rs
+          7987c05944df5c03ff2fcbeeedf2c8e79f973d75
+          vendor/canonical-api-server.rs
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
@@ -65,6 +65,7 @@ jobs:
 
           contract = json.loads(Path('canonical-quote-source.json').read_text())
           source = Path('vendor/canonical-api-server.rs')
+          assert contract['sourceCommit'] == '7987c05944df5c03ff2fcbeeedf2c8e79f973d75'
           assert hashlib.sha256(
               (source / contract['schemaPath']).read_bytes()
           ).hexdigest() == contract['schemaSha256']
