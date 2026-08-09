@@ -92,7 +92,27 @@ if observed_gitlink != expected_dpm:
         f"observed {observed_gitlink}"
     )
 
+
+def normalize_shell_commands(text: str) -> str:
+    """Collapse shell continuations and whitespace without changing semantics."""
+    commands: list[str] = []
+    current: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        continued = line.endswith("\\")
+        current.append(line[:-1].rstrip() if continued else line)
+        if not continued:
+            commands.append(" ".join(" ".join(current).split()))
+            current = []
+    if current:
+        commands.append(" ".join(" ".join(current).split()))
+    return "\n".join(commands)
+
+
 fetch_helper = (root / "scripts/fetch-exact-public-source.sh").read_text()
+normalized_fetch_helper = normalize_shell_commands(fetch_helper)
 for required_text in (
     'https://github.com/${repository}.git',
     'fetch --quiet --no-tags --depth=1 origin "$commit"',
@@ -100,7 +120,7 @@ for required_text in (
     'rev-parse HEAD',
     'remote remove origin',
 ):
-    if required_text not in fetch_helper:
+    if required_text not in normalized_fetch_helper:
         raise SystemExit(f"exact-source helper omits {required_text}")
 
 workflow = (root / ".github/workflows/ci.yml").read_text()
