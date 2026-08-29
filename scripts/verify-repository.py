@@ -25,6 +25,8 @@ required = [
     "scripts/test-postgres-forward-rollback.sh",
     "scripts/test-canonical-backup-restore.sh",
     "scripts/test-canonical-quote-readiness.sh",
+    ".github/workflows/canonical-quote.yml",
+    "scripts/test-canonical-quote-postgres.sh",
 ]
 missing = [path for path in required if not (root / path).exists()]
 if missing:
@@ -220,6 +222,27 @@ for required_text in (
         raise SystemExit(f"readiness script omits {required_text}")
 if "gemini-3.6-pro" in readiness_script:
     raise SystemExit("readiness script contains unsupported Gemini model")
+
+
+quote_pg_workflow = (root / ".github/workflows/canonical-quote.yml").read_text()
+for required_text in (
+    "postgres: ['16', '17', '18']",
+    "scripts/test-canonical-quote-postgres.sh",
+    "persist-credentials: false",
+    "contents: read",
+):
+    if required_text not in quote_pg_workflow:
+        raise SystemExit(f"PG 16-18 quote workflow omits {required_text}")
+
+quote_pg_script = (root / "scripts/test-canonical-quote-postgres.sh").read_text()
+for required_text in (
+    "POSTGRES_MAJOR",
+    "canonical_quote",
+    "DROP POLICY canonical_quote_owner_policy",
+    "--fail-on-diff",
+):
+    if required_text not in quote_pg_script:
+        raise SystemExit(f"PG 16-18 quote script omits {required_text}")
 
 credential = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY")
 for path in tracked_files:
