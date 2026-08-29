@@ -16,7 +16,7 @@ concurrency:
 jobs:
   certify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17
@@ -30,27 +30,80 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Check out the migration test repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 1
           persist-credentials: false
           submodules: recursive
+
+      - name: Fetch the exact public Canonical quote source
+        shell: bash
+        run: >-
+          scripts/fetch-exact-public-source.sh
+          canonical-cloud/canonical-api-server.rs
+          7987c05944df5c03ff2fcbeeedf2c8e79f973d75
+          vendor/canonical-api-server.rs
+
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
-          toolchain: stable
+          toolchain: "1.95.0"
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: vendor/declarative-postgres-migrate.rs -> target
-      - name: Validate repository contract
-        run: python3 scripts/verify-repository.py
+
+      - name: Validate repository and Canonical source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-repository.py
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          contract = json.loads(Path('canonical-quote-source.json').read_text())
+          source = Path('vendor/canonical-api-server.rs')
+          assert contract['sourceCommit'] == '7987c05944df5c03ff2fcbeeedf2c8e79f973d75'
+          assert hashlib.sha256(
+              (source / contract['schemaPath']).read_bytes()
+          ).hexdigest() == contract['schemaSha256']
+          namespace = json.loads((source / 'db/namespace.json').read_text())
+          assert namespace['declarativeMigration']['revision'] == contract['dpmCommit']
+          assert namespace['namespaceId'] == 'canonical_cloud__quote'
+          assert namespace['readiness']['endpoint'] == '/readyz'
+          assert namespace['readiness']['runtimeRole'] == 'canonical_cloud__quote__api_rw'
+          assert namespace['readiness']['failClosed'] is True
+          assert (source / contract['testScript']).is_file()
+          PY
+
       - name: Install PostgreSQL client
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
       - name: Build pinned dpm
         id: dpm
         shell: bash
         run: echo "path=$(scripts/build-dpm.sh)" >> "$GITHUB_OUTPUT"
-      - name: Run repeated live PostgreSQL cycles
+
+      - name: Run repeated generic PostgreSQL cycles
         env:
           DPM_BIN: ${{ steps.dpm.outputs.path }}
           POSTGRES_ADMIN_URL: postgres://postgres@localhost:5432/postgres
         run: scripts/test-postgres-forward-rollback.sh
+
+      - name: Certify the exact Canonical quote schema independently
+        env:
+          DPM_BIN: ${{ steps.dpm.outputs.path }}
+          POSTGRES_ADMIN_URL: postgres://postgres@localhost:5432/postgres
+        working-directory: vendor/canonical-api-server.rs
+        run: scripts/test-declarative-postgres.sh
+
+      - name: Upload bounded Canonical failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canonical-quote-postgres-${{ github.run_id }}
+          path: vendor/canonical-api-server.rs/artifacts/declarative-postgres
+          if-no-files-found: warn
+          retention-days: 7
