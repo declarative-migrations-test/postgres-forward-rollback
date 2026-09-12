@@ -1,0 +1,8 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: acceptance
+    ports:
+    - 5432:5432

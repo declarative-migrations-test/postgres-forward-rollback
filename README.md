@@ -43,3 +43,18 @@ scripts/build-dpm.sh
 The backup/restore script additionally requires disposable PostgreSQL 17 and 18 listeners and Docker for engine-matched `pg_dump`/`pg_restore` clients.
 
 Every behavior change must add a regression, preserve exact dependency pinning, avoid credentials in source or logs, and land through a pull request.
+
+## Test-org harness metadata
+
+Recorded by the `zed-pkg-test/test-org-fleet` bootstrapper (the generated harness under `scripts/`, `tests/` and `pyproject.toml`); the certification lane above remains the source of truth.
+
+- **Readiness:** `ready`
+- **Primary dependency strategy:** `matrix`
+- **Scheduled cadence:** `23 4 * * 2,5` UTC
+- **Live infrastructure:** PostgreSQL
+
+Acceptance objectives:
+
+1. Verify repeated apply and rollback with schema/data equivalence on PostgreSQL across the supported happy-path states and canonical fixtures.
+2. Verify repeated apply and rollback with schema/data equivalence on PostgreSQL under retries, interruption, concurrency, offline operation, or partial failure.
+3. Verify repeated apply and rollback with schema/data equivalence on PostgreSQL preserves authorization, idempotency, integrity, observability, and actionable failure classification.
