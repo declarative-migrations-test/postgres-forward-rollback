@@ -38,14 +38,14 @@ jobs:
           --health-retries 20
     steps:
       - name: Checkout migration certification harness
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
           submodules: recursive
 
       - name: Checkout exact Canonical quote v1 API candidate
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: canonical-cloud/canonical-api-server.rs
           ref: 4eb27ff78bc9cd93a81b8771710b56c18b41e7d3
